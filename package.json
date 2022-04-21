@@ -1,0 +1,24 @@
+{
+	"name": "0004-FGTP-Content-Address-EACs-Scraper",
+	"version": "0.0.1",
+	"description": "EACs scraper",
+	"type": "module",
+	"author": {
+		"name": "Momcilo Dzunic",
+		"email": "momcilo.dzunic@protocol.ai"
+	},
+	"devDependencies": {
+		"env-cmd": "^10.1.0"
+	},
+	"scripts": {
+		"scraper": "env-cmd node src/scraper.js",
+		"cleaner": "env-cmd node src/cleaner.js"
+	},
+	"dependencies": {
+		"axios": "^0.26.1",
+		"buffer": "^6.0.3",
+		"fs": "^0.0.1-security",
+		"ipfs-http-client": "^56.0.2",
+		"lodash.isequal": "^4.5.0"
+	}
+}
