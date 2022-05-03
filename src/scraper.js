@@ -12,6 +12,124 @@ process.stdout.write = process.stderr.write = access.write.bind(access);
 // Create / attach to node 
 const ipfs = create('http://127.0.0.1:5001')
 
+// Get miners who has redeemed EACs
+function getMinersFromZL()
+{
+    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/nodes`
+    return axios(getUri, {
+        method: 'get'
+    })
+}
+
+// Get all miners with locations from Jim Pick
+function getMinersFromJP()
+{
+    const getUri = `https://hub.textile.io/thread/bafkwblbznyqkmqx5l677z3kjsslhxo2vbbqh6wluunvvdbmqattrdya/buckets/bafzbeibjg7kky45npdwnogui5ffla7dint62xpttvvlzrsbewlrfmbusya/synthetic-country-state-province-locations-latest.json`
+    return axios(getUri, {
+        method: 'get'
+    })
+}
+
+// Update miner's location data
+function updateMinerWithLocationData(miner, minersWithLocations)
+{
+    let locations = minersWithLocations
+        .filter((mnr) => {return mnr.provider == miner.id})
+        .map((mnr) => {
+            delete mnr.provider
+            return mnr
+        })
+    miner.locations = JSON.parse(JSON.stringify(locations))
+    return miner
+}
+
+// Get EACs transactions
+function getTransactions(miner)
+{
+    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/nodes/${miner}/transactions`;
+    return axios(getUri, {
+        method: 'get'
+    });
+}
+
+// Get EACs purchases
+function getPurchases(transaction) {
+    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/purchases/${transaction}`;
+    return axios(getUri, {
+        method: 'get',
+        headers: {
+            'X-API-key': `${process.env.zerolabs_key}`
+        }
+    });
+}
+
+// Get EACs contracts (non-redeemed RECs)
+function getContracts(miner)
+{
+    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/nodes/${miner}/contracts`;
+    return axios(getUri, {
+        method: 'get'
+    });
+}
+
+// Get contract
+function getContract(contractId)
+{
+    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/contracts/${contractId}`;
+    return axios(getUri, {
+        method: 'get',
+        headers: {
+            'X-API-key': `${process.env.zerolabs_key}`
+        }
+    });
+}
+
+// Get the document
+async function getDocument(link, type)
+{
+    let response = await axios(link,
+        {
+            method: 'get',
+            headers: {
+                'X-API-key': `${process.env.zerolabs_key}`
+            },
+            responseType: 'arraybuffer'
+        }
+    )
+   if(response.status == 200)
+   {
+        let content = []
+        content.push(response.data)
+        const blob = new Blob(content, {type: type})
+        return blob
+   }
+   return null
+}
+
+// Check IPNS keys
+function keyExists(key, keys)
+{
+    return {
+        exists: keys.filter((k) => {return k.name == key}).length > 0,
+        index: keys.map((k) => {return k.name}).indexOf(key)
+    }
+}
+
+// Check IPNS subs
+function pubsubExists(id, subs)
+{
+    return {
+        exists: subs.filter((sub) => {return sub == '/ipns/' + id}).length > 0,
+        index: subs.indexOf('/ipns/' + id)
+    }
+}
+
+// Init keys stores
+let certificateKeys = []
+let sellerKeys = []
+let buyerKeys = []
+let minerKeys = []
+
 // Get miners from ZeroLabs API
 const minersZLResp = await getMinersFromZL()
 if(minersZLResp.status != 200)
@@ -266,6 +384,9 @@ for(let miner of miners)
         console.log(`Certificate CID:`)
         console.dir(distributionCid, { depth: null })
 
+        // Add key to certificates store
+        certificateKeys.push(distributionKey)
+
         // Create seller DAG
         let seller = JSON.parse(JSON.stringify(purchase.seller))
 
@@ -353,7 +474,10 @@ for(let miner of miners)
         console.dir(sellerSub, { depth: null })
         console.log(`Seller CID:`)
         console.dir(sellerCid, { depth: null })
-        
+
+        // Add key to sellers store
+        sellerKeys.push(sellerKey)
+
         // Create buyer DAG
         let buyer = JSON.parse(JSON.stringify(purchase.buyer))
 
@@ -459,7 +583,10 @@ for(let miner of miners)
         console.dir(buyerSub, { depth: null })
         console.log(`Buyer CID:`)
         console.dir(buyerCid, { depth: null })
-        
+       
+        // Add key to buyers store
+        buyerKeys.push(buyerKey)
+
         // Create certificate DAG
         let certificate = JSON.parse(JSON.stringify(purchase.certificate))
 
@@ -615,119 +742,109 @@ for(let miner of miners)
     console.dir(mnrSub, { depth: null })
     console.log(`Miner CID:`)
     console.dir(mnrCid, { depth: null })
+
+    // Add key to miners store
+    minerKeys.push(mnrKey)
 }
 
-// Get miners who has redeemed EACs
-function getMinersFromZL()
+// Publish stores
+console.log(`Certificates store:`)
+console.dir(certificateKeys, { depth: null })
+console.log(`Sellers store:`)
+console.dir(sellerKeys, { depth: null })
+console.log(`Buyers store:`)
+console.dir(buyerKeys, { depth: null })
+console.log(`Miners store:`)
+console.dir(minerKeys, { depth: null })
+
+// Chek do we already have key for keys.id and create it if not
+let keys = {
+    certificates: certificateKeys,
+    sellers: sellerKeys,
+    buyers: buyerKeys,
+    miners: minerKeys
+}
+const keysKeyId = 'keys'
+const keysKeyCheck = keyExists(keysKeyId, nodeKeys)
+let keysKey = null
+let keysSub = null
+let keysCid = null
+if(!keysKeyCheck.exists)
 {
-    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/nodes`
-    return axios(getUri, {
-        method: 'get'
+    // If there is no key create one
+    keysKey = await ipfs.key.gen(keysKeyId, {
+        type: 'ed25519',
+        size: 2048
+    })
+
+    // If there was no key there was no sub as well
+    // Create simple keys chain to keep track of changes
+    keys.parent = null    // First block
+
+    // Put DAG
+    keysCid = await ipfs.dag.put(keys, {
+        storeCodec: 'dag-cbor',
+        hashAlg: 'sha2-256',
+        pin: true
+    })
+
+    // Publish pubsub
+    keysSub = await ipfs.name.publish(keysCid, {
+        lifetime: '87600h',
+        key: keysKey.id
     })
 }
-
-// Get all miners with locations from Jim Pick
-function getMinersFromJP()
+else
 {
-    const getUri = `https://hub.textile.io/thread/bafkwblbznyqkmqx5l677z3kjsslhxo2vbbqh6wluunvvdbmqattrdya/buckets/bafzbeibjg7kky45npdwnogui5ffla7dint62xpttvvlzrsbewlrfmbusya/synthetic-country-state-province-locations-latest.json`
-    return axios(getUri, {
-        method: 'get'
-    })
-}
+    // If there was a key for keys.name get it
+    keysKey = nodeKeys[keysKeyCheck.index]
+    const keysKeyName = `/ipns/${keysKey.id}`
 
-// Update miner's location data
-function updateMinerWithLocationData(miner, minersWithLocations)
-{
-    let locations = minersWithLocations
-        .filter((mnr) => {return mnr.provider == miner.id})
-        .map((mnr) => {
-            delete mnr.provider
-            return mnr
+    // Resolve IPNS name
+    for await (const name of ipfs.name.resolve(keysKeyName)) {
+        keysCid = name.replace('/ipfs/', '')
+    }
+
+    keysCid = CID.parse(keysCid)
+
+    // Get last chained keys DAG
+    let chainedKeys = await ipfs.dag.get(keysCid)
+
+    // remember and remove parent block CID
+    chainedKeys = JSON.parse(JSON.stringify(chainedKeys.value))
+    const parentKeysCid = chainedKeys.parent
+    delete chainedKeys.parent
+
+    // Check two objects
+    if(!isEqual(keys, chainedKeys))
+    {
+        // Create new DAG, add new block to the keys chain
+        // and refresh subs
+        keys.parent = keysCid
+
+        // Put new child block DAG
+        keysCid = await ipfs.dag.put(keys, {
+            storeCodec: 'dag-cbor',
+            hashAlg: 'sha2-256',
+            pin: true
         })
-    miner.locations = JSON.parse(JSON.stringify(locations))
-    return miner
-}
 
-// Get EACs transactions
-function getTransactions(miner)
-{
-    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/nodes/${miner}/transactions`;
-    return axios(getUri, {
-        method: 'get'
-    });
-}
-
-// Get EACs purchases
-function getPurchases(transaction) {
-    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/purchases/${transaction}`;
-    return axios(getUri, {
-        method: 'get',
-        headers: {
-            'X-API-key': `${process.env.zerolabs_key}`
-        }
-    });
-}
-
-// Get EACs contracts (non-redeemed RECs)
-function getContracts(miner)
-{
-    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/nodes/${miner}/contracts`;
-    return axios(getUri, {
-        method: 'get'
-    });
-}
-
-// Get contract
-function getContract(contractId)
-{
-    const getUri = `https://proofs-api.zerolabs.green/api/partners/filecoin/contracts/${contractId}`;
-    return axios(getUri, {
-        method: 'get',
-        headers: {
-            'X-API-key': `${process.env.zerolabs_key}`
-        }
-    });
-}
-
-// Get the document
-async function getDocument(link, type)
-{
-    let response = await axios(link,
-        {
-            method: 'get',
-            headers: {
-                'X-API-key': `${process.env.zerolabs_key}`
-            },
-            responseType: 'arraybuffer'
-        }
-    )
-   if(response.status == 200)
-   {
-        let content = []
-        content.push(response.data)
-        const blob = new Blob(content, {type: type})
-        return blob
-   }
-   return null
-}
-
-// Check IPNS keys
-function keyExists(key, keys)
-{
-    return {
-        exists: keys.filter((k) => {return k.name == key}).length > 0,
-        index: keys.map((k) => {return k.name}).indexOf(key)
+        // Publish pubsub
+        keysSub = await ipfs.name.publish(keysCid, {
+            lifetime: '87600h',
+            key: keysKey.id
+        })
     }
 }
 
-// Check IPNS subs
-function pubsubExists(id, subs)
-{
-    return {
-        exists: subs.filter((sub) => {return sub == '/ipns/' + id}).length > 0,
-        index: subs.indexOf('/ipns/' + id)
-    }
-}
+console.log(`Keys Key:`)
+console.dir(keysKey, { depth: null })
+console.log(`Keys Sub:`)
+console.dir(keysSub, { depth: null })
+console.log(`Keys CID:`)
+console.dir(keysCid, { depth: null })
+
+await new Promise(resolve => setTimeout(resolve, 10000));
 
 // Exit program
 process.exit()
