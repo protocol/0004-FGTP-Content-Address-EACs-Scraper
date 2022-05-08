@@ -12,13 +12,16 @@
 	},
 	"scripts": {
 		"scraper": "env-cmd node src/scraper.js",
-		"cleaner": "env-cmd node src/cleaner.js"
+		"cleaner": "env-cmd node src/cleaner.js",
+		"creator": "env-cmd node src/creator.js"
 	},
 	"dependencies": {
+		"@octokit/core": "^3.6.0",
 		"axios": "^0.26.1",
 		"buffer": "^6.0.3",
 		"fs": "^0.0.1-security",
 		"ipfs-http-client": "^56.0.2",
-		"lodash.isequal": "^4.5.0"
+		"lodash.isequal": "^4.5.0",
+		"papaparse": "^5.3.2"
 	}
 }
