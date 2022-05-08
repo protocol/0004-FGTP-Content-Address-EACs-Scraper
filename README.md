@@ -16,7 +16,7 @@ https://explore.ipld.io/#/explore/bafyreiafzzl7rn6ebuyfmprvws2lyvjxhlb2qvrpsqhea
 
 ### ToDo
 
-1. Script for creating [ordering IPLD structures](https://docs.google.com/presentation/d/1fSjbg9dwdabxtgs2Uy8Km0WhB66-vOUC9WP08zBnnWE/edit#slide=id.g125378e22b0_0_0)
+~~1. Script for creating [ordering IPLD structures](https://docs.google.com/presentation/d/1fSjbg9dwdabxtgs2Uy8Km0WhB66-vOUC9WP08zBnnWE/edit#slide=id.g125378e22b0_0_0)~~ (done)
 
 ### License
 Licensed under the MIT license.
