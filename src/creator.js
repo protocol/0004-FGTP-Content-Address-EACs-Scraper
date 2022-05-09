@@ -137,7 +137,8 @@ for (const transactionFolder of transactionFolders) {
                 delete demand.step11_finalRecord_complete
 
                 // Make sure MWh are Numbers
-                if(typeof demand.volume_MWh == "String") {
+                if(typeof demand.volume_MWh == "string") {
+                    demand.volume_MWh = demand.volume_MWh.replace(',', '')
                     demand.volume_MWh = demand.volume_MWh.trim()
                     demand.volume_MWh = Number(demand.volume_MWh)
                 }
@@ -160,11 +161,6 @@ for (const transactionFolder of transactionFolders) {
 
             // Delete mutable columns and at same create DAG structures for contracts
             for (const contract of contracts[transactionFolder.name]) {
-// Remove when error in source data structure is fixed
-if(contract.contract_id == null && contract.tranche_id != null) {
-    contract.contract_id = contract.tranche_id.replace('_line_', '_contract_')
-    delete contract.tranche_id
-}
                 // Delete mutable columns
                 delete contract.step2_order_complete
                 delete contract.step3_match_complete
@@ -178,7 +174,8 @@ if(contract.contract_id == null && contract.tranche_id != null) {
                 delete contract.step11_finalRecord_complete
 
                 // Make sure MWh are Numbers
-                if(typeof contract.volume_MWh == "String") {
+                if(typeof contract.volume_MWh == "string") {
+                    contract.volume_MWh = contract.volume_MWh.replace(',', '')
                     contract.volume_MWh = contract.volume_MWh.trim()
                     contract.volume_MWh = Number(contract.volume_MWh)
                 }
