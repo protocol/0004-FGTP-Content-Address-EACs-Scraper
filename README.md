@@ -11,8 +11,13 @@ Develop base data schema (DAG) to streamline the purchase, exchange, and retirem
 https://explore.ipld.io/#/explore/bafyreiafzzl7rn6ebuyfmprvws2lyvjxhlb2qvrpsqheaa24acvrv5f6uu
 
 ### Use
+To run the scraper (scraping data from WEB2 API) 
 
     npm run scraper
+
+To run the creator (creating IPFS structures from CSV sources)
+
+    npm run creator
 
 ### ToDo
 
