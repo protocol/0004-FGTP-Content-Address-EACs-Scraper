@@ -1,5 +1,6 @@
 import { create } from 'ipfs-http-client'
 import fs from 'fs'
+import { Blob } from 'buffer'
 import axios from 'axios'
 import Papa from 'papaparse'
 import { Octokit } from '@octokit/core'
@@ -66,42 +67,74 @@ switch (activities) {
 await new Promise(resolve => setTimeout(resolve, 3000));
 process.exit()
 
-// Get CSV
-function getCSV(getUri)
+// Get content from URI
+function getUriContent(getUri, headers, responseType)
 {
     return axios(getUri, {
-        method: 'get'
+        method: 'get',
+        headers: headers,
+        responseType: responseType
     })
 }
 
-// Get CSV from Github repo
-async function getCSVfromGithub(path, fileName) {
+// Get raw content from Github repo
+async function getRawFromGithub(path, fileName, type, contentType) {
     const uri = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO}/main/${path}/${fileName}`
-    const resp = await getCSV(uri)
+    const headers = {
+        'Authorization': `token ${process.env.github_personal_access_token}`
+    }
+    let responseType
+    switch (type) {
+        case 'arraybuffer':
+            responseType = 'arraybuffer'
+            break
+        default:
+            responseType = null
+            break
+    }
+
+    const resp = await getUriContent(uri, headers, responseType)
     if(resp.status != 200)
     {
-        console.error('Didn\'t get valid \'CSV\' response')
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        process.exit()
-    }
-    const csv = resp.data
-    
-    let rows = []
-
-    return new Promise((resolve) => {
-        Papa.parse(csv, {
-            worker: true,
-            header: true,
-            dynamicTyping: true,
-            comments: "#",
-            step: (row) => {
-                rows.push(row.data)
-            },
-            complete: () => {
-                resolve(rows)
-            }
+        console.error('Didn\'t get valid \'UriContent\' response')
+        return new Promise((resolve) => {
+            resolve(null)
         })
-    })
+    }
+
+    switch (type) {
+        case 'csv':
+            const csv = resp.data
+            let rows = []
+            return new Promise((resolve) => {
+                Papa.parse(csv, {
+                    worker: true,
+                    header: true,
+                    dynamicTyping: true,
+                    comments: "#",
+                    step: (row) => {
+                        rows.push(row.data)
+                    },
+                    complete: () => {
+                        resolve(rows)
+                    }
+                })
+            })
+            break
+        case 'arraybuffer':
+            return new Promise((resolve) => {
+                let content = []
+                content.push(resp.data)
+                const blob = new Blob(content, {type: contentType})
+                resolve(blob)
+            })
+            break
+        default:
+            return new Promise((resolve) => {
+                resolve(resp.data)
+            })
+            break
+    }
 }
 
 async function createOrderContractAllocations() {
@@ -133,7 +166,7 @@ async function createOrderContractAllocations() {
 
         if(orderCsvFile.length == 1) {
             // Get CSV content (acctually contracts for this specific order)
-            contracts[transactionFolder.name] = await getCSVfromGithub(transactionFolder.path, orderCsvFileName)
+            contracts[transactionFolder.name] = await getRawFromGithub(transactionFolder.path, orderCsvFileName, 'csv')
 
             // Search for match CSV file
             const matchName = transactionFolder.name + STEP_3_FILE_NAME
@@ -146,7 +179,7 @@ async function createOrderContractAllocations() {
 
             if(match.length == 1) {
                 // Get CSV content (acctually demands for this specific order)
-                demands[transactionFolder.name] = await getCSVfromGithub(transactionFolder.path, matchName)
+                demands[transactionFolder.name] = await getRawFromGithub(transactionFolder.path, matchName, 'csv')
 
                 // Delete mutable columns and at same create DAG structures for demands
                 for (const demand of demands[transactionFolder.name]) {
@@ -267,6 +300,7 @@ async function createAttestationsCertificates() {
     for (const transactionFolder of transactionFolders) {
         let suppliesCache = {}
         let certificatesCache = []
+        let attestationDocumentsCache = {}
 
         // Get contents of transactions directory
         const transactionFolderItems = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
@@ -292,7 +326,7 @@ async function createAttestationsCertificates() {
 
         if(redemptionsCsvFile.length == 1) {
             // Get CSV content (acctually contracts for this specific order)
-            redemptions[transactionFolder.name] = await getCSVfromGithub(transactionFolder.path, redemptionsCsvFileName)
+            redemptions[transactionFolder.name] = await getRawFromGithub(transactionFolder.path, redemptionsCsvFileName, 'csv')
 
             // Theoretically we should search folder path with each attestation
             // but since all attestations point to the same folder let take it from line 1
@@ -327,7 +361,7 @@ async function createAttestationsCertificates() {
 
             if(certificatesCsvFile.length == 1) {
                 // Get CSV content (acctually certificates and attestations)
-                certificates[attestationFolder] = await getCSVfromGithub(attestationFolder, certificatesCsvFileName)
+                certificates[attestationFolder] = await getRawFromGithub(attestationFolder, certificatesCsvFileName, 'csv')
 
                 // Search for match / supply CSV file
                 const matchName = attestationFolder + STEP_7_FILE_NAME
@@ -340,7 +374,7 @@ async function createAttestationsCertificates() {
 
                 if(match.length == 1) {
                     // Get CSV content (acctually supplies for certificates/attestations)
-                    supplies[attestationFolder] = await getCSVfromGithub(attestationFolder, matchName)
+                    supplies[attestationFolder] = await getRawFromGithub(attestationFolder, matchName, 'csv')
 
                     // Delete mutable columns and at same create DAG structures for supplies
                     for (const supply of supplies[attestationFolder]) {
@@ -367,6 +401,8 @@ async function createAttestationsCertificates() {
                         suppliesCache[supply.certificate].push(supplyCid)
                     }
 
+                    // Reset attestation documents cache
+                    attestationDocumentsCache = {}
                     // Delete mutable columns and at same create DAG structures for certificates
                     for (const certificate of certificates[attestationFolder]) {
                         // Delete mutable columns
@@ -389,6 +425,36 @@ async function createAttestationsCertificates() {
                         // Add links to supplies
                         certificate.supplies = suppliesCache[certificate.certificate]
 
+                        // Add attestation document link
+                        let attestationDocumentCid
+                        // Get attestation document
+                        const attestationDocumentName = certificate.attestation_file
+                        // Did we already add this attestation document
+                        if(attestationDocumentsCache[attestationDocumentName] == null) {
+
+                            const attestationDocumentResp =  await getRawFromGithub(attestationFolder, attestationDocumentName, 'arraybuffer', 'application/pdf')
+                            if(attestationDocumentResp == null)
+                            {
+                                console.error(`Didn\'t get valid \'attestation document\' ${attestationDocumentName} in ${attestationFolder}`)
+                                await new Promise(resolve => setTimeout(resolve, 1000));
+                                process.exit()
+                            }
+                            
+                            // Add attestation document to IPFS
+                            attestationDocumentCid = await ipfs.add(attestationDocumentResp, {
+                                'cidVersion': 1,
+                                'hashAlg': 'sha2-256'
+                            })
+                            console.log(`Attestation document CID for ${attestationFolder}/${attestationDocumentName}, ${attestationDocumentCid.cid}`)
+
+                            attestationDocumentsCache[attestationDocumentName] = attestationDocumentCid
+                        }
+                        else {
+                            attestationDocumentCid = attestationDocumentsCache[attestationDocumentName]
+                        }
+
+                        certificate.attestationDocumentCid = attestationDocumentCid.cid
+
                         // Create DAG structures
                         const certificateCid = await ipfs.dag.put(certificate, {
                             storeCodec: 'dag-cbor',
@@ -405,20 +471,20 @@ async function createAttestationsCertificates() {
                         })
                     }
 
-                    // Create attestation object
-                    const attestation = {
+                    // Create attestations object
+                    const attestations = {
                         name: attestationFolder,
                         certificates: certificatesCache
                     }
 
                     // Create DAG structure
-                    const attestationCid = await ipfs.dag.put(attestation, {
+                    const attestationsCid = await ipfs.dag.put(attestations, {
                         storeCodec: 'dag-cbor',
                         hashAlg: 'sha2-256',
                         pin: true
                     })
 
-                    console.log(`Attestation CID for ${attestationFolder}: ${attestationCid}`)
+                    console.log(`Attestations CID for ${attestationFolder}: ${attestationsCid}`)
                 }
                 else if(match.length > 1) {
                     console.error(`Can't have many '${matchName}' CSV files in '${attestationFolder}'`)
