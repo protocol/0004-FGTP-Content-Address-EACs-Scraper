@@ -17,7 +17,11 @@ To run the scraper (scraping data from WEB2 API)
 
 To run the creator (creating IPFS structures from CSV sources)
 
-    npm run creator
+    // Create IPFS structures for an order, contracts and allocations
+    npm run creator order-contracts-allocations
+
+    // Create IPFS structures for attestations and certificates
+    npm run creator attestations-certificates
 
 ### ToDo
 
