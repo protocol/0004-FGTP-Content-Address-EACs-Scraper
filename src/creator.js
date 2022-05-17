@@ -423,7 +423,8 @@ async function createAttestationsCertificates() {
                         certificate.generationEnd = String(certificate.generationEnd)
 
                         // Add links to supplies
-                        certificate.supplies = suppliesCache[certificate.certificate]
+                        const sc = suppliesCache[certificate.certificate]
+                        certificate.supplies = (sc != undefined) ? sc : null
 
                         // Add attestation document link
                         let attestationDocumentCid
