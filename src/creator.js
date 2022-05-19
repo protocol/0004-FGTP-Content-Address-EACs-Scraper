@@ -4,6 +4,7 @@ import { Blob } from 'buffer'
 import axios from 'axios'
 import Papa from 'papaparse'
 import { Octokit } from '@octokit/core'
+import { Base64 } from 'js-base64'
 
 // We'll do logging to fs
 let access = fs.createWriteStream(`./logs/creator-${(new Date()).toISOString()}.log`);
@@ -68,8 +69,7 @@ await new Promise(resolve => setTimeout(resolve, 3000));
 process.exit()
 
 // Get content from URI
-function getUriContent(getUri, headers, responseType)
-{
+function getUriContent(getUri, headers, responseType) {
     return axios(getUri, {
         method: 'get',
         headers: headers,
@@ -403,8 +403,11 @@ async function createAttestationsCertificates() {
 
                     // Reset attestation documents cache
                     attestationDocumentsCache = {}
+                    // Prepare an separate object for updating step 6 CSV
+                    let step6CsvObj = JSON.parse(JSON.stringify(certificates[attestationFolder]))
+                    let step6CsvInd = 0
                     // Delete mutable columns and at same create DAG structures for certificates
-                    for (const certificate of certificates[attestationFolder]) {
+                    for (let certificate of certificates[attestationFolder]) {
                         // Delete mutable columns
                         delete certificate.attestation_cid
                         delete certificate.certificate_cid
@@ -470,7 +473,25 @@ async function createAttestationsCertificates() {
                             id: certificate.certificate,
                             cid: certificateCid
                         })
+                        
+                        // Add CIDs to update step 6 CSV file with certificate and attestation CIDs
+                        step6CsvObj[step6CsvInd].attestation_cid = attestationDocumentCid.cid.toString()
+                        step6CsvObj[step6CsvInd].certificate_cid = certificateCid.toString()
+                        step6CsvInd++
                     }
+
+                    // Update step 6 CSV file
+                    const step6Header = ['"attestation_id"', '"attestation_file"', '"attestation_cid"', '"certificate"',
+                        '"certificate_cid"', '"reportingStart"', '"reportingStartTimezoneOffset"', '"reportingEnd"', '"reportingEndTimezoneOffset"',
+                        '"sellerName"', '"sellerAddress"', '"country"', '"region"', '"volume_Wh"', '"generatorName"', '"productType"', '"label"',
+                        '"energySource"', '"generationStart"', '"generationStartTimezoneOffset"', '"generationEnd"', '"generationEndTimezoneOffset"']
+                    const step6ColumnTypes = ["string", "string", "string", "string",
+                        "string", "string", "number", "string", "number",
+                        "string", "string", "string", "string", "number", "string", "string", "string",
+                        "string", "string", "number", "string", "number"]
+                    const step6CsvFileSha = certificatesCsvFile[0].sha
+                    await updateCsvInGithub(attestationFolder, certificatesCsvFileName, step6CsvFileSha,
+                        step6Header, step6CsvObj, step6ColumnTypes)
 
                     // Create attestations object
                     const attestations = {
@@ -521,4 +542,36 @@ async function createAttestationsCertificates() {
 //            process.exit()
         }
     }
+}
+
+// Update CSV file in github repo
+async function updateCsvInGithub(folder, csvFileName, sha, csvHeader, csvObj, csvColumnTypes) {
+    console.log(folder, csvFileName, sha)
+    let csv = csvHeader.join(",") + "\r\n" +
+        Papa.unparse(csvObj, {
+            quotes: csvColumnTypes.map((ct) => {return ct != 'number'}),
+            quoteChar: '"',
+            escapeChar: '"',
+            delimiter: ",",
+            header: false,
+            newline: "\r\n",
+            skipEmptyLines: false,
+            columns: null
+        })
+    console.log(csv)
+    const contentEncoded = Base64.encode(csv)
+
+    const response = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+        owner: REPO_OWNER,
+        repo: REPO,
+        path: `${folder}/${csvFileName}`,
+        message: `Octokit bot: Updating file ${csvFileName}`,
+        committer: {
+            name: 'Momcilo Dzunic | Octokit bot',
+            email: 'momcilo.dzunic@protocol.ai'
+        },
+        sha: sha,
+        content: contentEncoded
+    })
+    console.dir(response, { depth: null })
 }
