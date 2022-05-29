@@ -1,10 +1,14 @@
 import { create } from 'ipfs-http-client'
+import { CID } from 'multiformats/cid'
 import fs from 'fs'
 import { Blob } from 'buffer'
 import axios from 'axios'
 import Papa from 'papaparse'
 import { Octokit } from '@octokit/core'
 import { Base64 } from 'js-base64'
+import isEqual from 'lodash.isequal'
+import cloneDeep from 'lodash.clonedeep'
+
 
 // We'll do logging to fs
 let access = fs.createWriteStream(`./logs/creator-${(new Date()).toISOString()}.log`);
@@ -25,6 +29,7 @@ let demands = {}
 let redemptions = {}
 let certificates = {}
 let supplies = {}
+let nodeKeys
 
 // Create / attach to node 
 const ipfs = create('http://127.0.0.1:5001')
@@ -67,6 +72,14 @@ switch (activities) {
 }
 await new Promise(resolve => setTimeout(resolve, 3000));
 process.exit()
+
+// Check IPNS keys
+function keyExists(key, keys) {
+    return {
+        exists: keys.filter((k) => {return k.name == key}).length > 0,
+        index: keys.map((k) => {return k.name}).indexOf(key)
+    }
+}
 
 // Get content from URI
 function getUriContent(getUri, headers, responseType) {
@@ -138,9 +151,15 @@ async function getRawFromGithub(path, fileName, type, contentType) {
 }
 
 async function createOrderContractAllocations() {
+    let transactions = {}
+
+    // Get existing node keys
+    nodeKeys = await ipfs.key.list()
+
     for (const transactionFolder of transactionFolders) {
         let demandsCache = {}
         let contractsCache = []
+        let allocations = {}
 
         // Get contents of transactions directory
         const transactionFolderItems = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
@@ -152,7 +171,7 @@ async function createOrderContractAllocations() {
         {
             console.error('Didn\'t get valid \'transactionFolderItems\' response')
             await new Promise(resolve => setTimeout(resolve, 1000));
-            process.exit()
+            continue
         }
 
         // Search for order CSV file
@@ -215,6 +234,15 @@ async function createOrderContractAllocations() {
                     if(demandsCache[demand.contract_id] == null)
                         demandsCache[demand.contract_id] = []
                     demandsCache[demand.contract_id].push(demandCid)
+
+                    // Make vice-versa linking for allocations
+                    allocations[demand.allocation_id] = {
+                        "allocation": demand,
+                        "minerID": demand.minerID,
+                        "volume_MWh": demand.volume_MWh,
+                        "defaulted": demand.defaulted,
+                        "allocation_cid": demandCid
+                    }
                 }
 
                 // Delete mutable columns and at same create DAG structures for contracts
@@ -255,6 +283,12 @@ async function createOrderContractAllocations() {
                         id: contract.contract_id,
                         cid: contractCid
                     })
+
+                    // Make vice-versa linking for allocations
+                    for (let allocationId in allocations) {
+                        if(allocations[allocationId].allocation.contract_id == contract.contract_id)
+                            allocations[allocationId].contract_cid = contractCid
+                    }
                 }
 
                 // Create order object
@@ -271,32 +305,151 @@ async function createOrderContractAllocations() {
                 })
 
                 console.log(`Order CID for ${transactionFolder.name}: ${orderCid}`)
+
+                // Make vice-versa linking for allocations
+                for (let allocationId in allocations) {
+                    allocations[allocationId].order_cid = orderCid
+                }
+
+                // Create DAG structure for allocations
+                const allocationsCid = await ipfs.dag.put(allocations, {
+                    storeCodec: 'dag-cbor',
+                    hashAlg: 'sha2-256',
+                    pin: true
+                })
+
+                console.log(`Allocations CID for ${transactionFolder.name}: ${allocationsCid}`)
+
+                // Add allocations to transaction object for this transaction
+                transactions[transactionFolder.name] = {
+                    "allocations_cid": allocationsCid,
+                    "order_cid": orderCid
+                }
             }
             else if(match.length > 1) {
-            console.error(`Can't have many '${matchName}' CSV files in '${transactionFolder.path}'`)
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            process.exit()
+                console.error(`Can't have many '${matchName}' CSV files in '${transactionFolder.path}'`)
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                continue
             }
-                else {
-                    console.error(`Didn't find '${matchName}' CSV file in '${transactionFolder.path}'`)
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    process.exit()
+            else {
+                console.error(`Didn't find '${matchName}' CSV file in '${transactionFolder.path}'`)
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                continue
             }
         }
         else if(orderCsvFile.length > 1) {
             console.error(`Can't have many '${orderCsvFileName}' CSV files in '${transactionFolder.path}'`)
             await new Promise(resolve => setTimeout(resolve, 1000));
-            process.exit()
+            continue
         }
         else {
             console.error(`Didn't find '${orderCsvFileName}' CSV file in '${transactionFolder.path}'`)
             await new Promise(resolve => setTimeout(resolve, 1000));
-            process.exit()
+            continue
         }
     }
+    // Create DAG structure for transactions
+    const transactionsCid = await ipfs.dag.put(transactions, {
+        storeCodec: 'dag-cbor',
+        hashAlg: 'sha2-256',
+        pin: true
+    })
+
+    console.log(`Transactions CID: ${transactionsCid}`)
+
+    // Chek do we already have key for transactions' keys and create it if not
+    let transactionsChain = {
+        "transactions_cid": transactionsCid
+    }
+    const transactionsChainKeyId = 'transactions'
+    const transactionsChainKeyCheck = keyExists(transactionsChainKeyId, nodeKeys)
+    let transactionsChainKey = null
+    let transactionsChainSub = null
+    let transactionsChainCid = null
+    if(!transactionsChainKeyCheck.exists)
+    {
+        // If there is no key create one
+        transactionsChainKey = await ipfs.key.gen(transactionsChainKeyId, {
+            type: 'ed25519',
+            size: 2048
+        })
+
+        // If there was no key there was no sub as well
+        // Create simple transactions chain to keep track of changes
+        transactionsChain.parent = null    // First block
+
+        // Put DAG
+        transactionsChainCid = await ipfs.dag.put(transactionsChain, {
+            storeCodec: 'dag-cbor',
+            hashAlg: 'sha2-256',
+            pin: true
+        })
+
+        // Publish pubsub
+        transactionsChainSub = await ipfs.name.publish(transactionsChainCid, {
+            lifetime: '87600h',
+            key: transactionsChainKey.id
+        })
+    }
+    else
+    {
+        // If there was a key for transactionsChain get it
+        transactionsChainKey = nodeKeys[transactionsChainKeyCheck.index]
+        const transactionsChainKeyName = `/ipns/${transactionsChainKey.id}`
+
+        // Resolve IPNS name
+        for await (const name of ipfs.name.resolve(transactionsChainKeyName)) {
+            transactionsChainCid = name.replace('/ipfs/', '')
+        }
+
+        transactionsChainCid = CID.parse(transactionsChainCid)
+
+        // Get last chained transactionsChain DAG
+        let lastBlock = await ipfs.dag.get(transactionsChainCid)
+
+        // remember and remove parent block CID
+        lastBlock = cloneDeep(lastBlock.value)
+        const parentChainCid = lastBlock.parent
+        delete lastBlock.parent
+
+//        if(!isEqual(transactionsChain, lastBlock))
+        if(lastBlock.transactions_cid.toString() != transactionsChain.transactions_cid.toString())
+        {
+            // Create new DAG, add new block to the transactionsChain chain
+            // and refresh subs
+            transactionsChain.parent = transactionsChainCid
+
+            // Put new child block DAG
+            transactionsChainCid = await ipfs.dag.put(transactionsChain, {
+                storeCodec: 'dag-cbor',
+                hashAlg: 'sha2-256',
+                pin: true
+            })
+
+            // Publish pubsub
+            transactionsChainSub = await ipfs.name.publish(transactionsChainCid, {
+                lifetime: '87600h',
+                key: transactionsChainKey.id
+            })
+        }
+    }
+
+    console.log(`Chain Key:`)
+    console.dir(transactionsChainKey, { depth: null })
+    console.log(`Chain Sub:`)
+    console.dir(transactionsChainSub, { depth: null })
+    console.log(`Chain CID:`)
+    console.dir(transactionsChainCid, { depth: null })
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
 }
 
 async function createAttestationsCertificates() {
+    let deliveries = {}
+
+    // Get existing node keys
+    nodeKeys = await ipfs.key.list()
+
     for (const transactionFolder of transactionFolders) {
         let suppliesCache = {}
         let certificatesCache = []
@@ -392,7 +545,7 @@ async function createAttestationsCertificates() {
                             pin: true
                         })
             
-                        console.log(`Supply CID for ${supply.certificate} / ${supply.contract} / ${supply.minerID}: ${supplyCid}`)
+                        console.log(`Supply CID for ${supply.certificate} / ${supply.allocation}: ${supplyCid}`)
 
                         // Relate supply CIDs with certificate Id so that we do
                         // not have to traverse whole JSON structure
@@ -507,6 +660,11 @@ async function createAttestationsCertificates() {
                     })
 
                     console.log(`Attestations CID for ${attestationFolder}: ${attestationsCid}`)
+
+                    // Add certificates to deliveries object for this delivery
+                    deliveries[attestationFolder.name] = {
+                        "deliveries_cid": attestationsCid
+                    }
                 }
                 else if(match.length > 1) {
                     console.error(`Can't have many '${matchName}' CSV files in '${attestationFolder}'`)
@@ -542,6 +700,100 @@ async function createAttestationsCertificates() {
 //            process.exit()
         }
     }
+    // Create DAG structure for deliveries
+    const deliveriesCid = await ipfs.dag.put(deliveries, {
+        storeCodec: 'dag-cbor',
+        hashAlg: 'sha2-256',
+        pin: true
+    })
+
+    console.log(`Deliveries CID: ${deliveriesCid}`)
+
+    // Chek do we already have key for deliveries' keys and create it if not
+    let deliveriesChain = {
+        "deliveries_cid": deliveriesCid
+    }
+    const deliveriesChainKeyId = 'deliveries'
+    const deliveriesChainKeyCheck = keyExists(deliveriesChainKeyId, nodeKeys)
+    let deliveriesChainKey = null
+    let deliveriesChainSub = null
+    let deliveriesChainCid = null
+    if(!deliveriesChainKeyCheck.exists)
+    {
+        // If there is no key create one
+        deliveriesChainKey = await ipfs.key.gen(deliveriesChainKeyId, {
+            type: 'ed25519',
+            size: 2048
+        })
+
+        // If there was no key there was no sub as well
+        // Create simple deliveries chain to keep track of changes
+        deliveriesChain.parent = null    // First block
+
+        // Put DAG
+        deliveriesChainCid = await ipfs.dag.put(deliveriesChain, {
+            storeCodec: 'dag-cbor',
+            hashAlg: 'sha2-256',
+            pin: true
+        })
+
+        // Publish pubsub
+        deliveriesChainSub = await ipfs.name.publish(deliveriesChainCid, {
+            lifetime: '87600h',
+            key: deliveriesChainKey.id
+        })
+    }
+    else
+    {
+        // If there was a key for deliveriesChain get it
+        deliveriesChainKey = nodeKeys[deliveriesChainKeyCheck.index]
+        const deliveriesChainKeyName = `/ipns/${deliveriesChainKey.id}`
+
+        // Resolve IPNS name
+        for await (const name of ipfs.name.resolve(deliveriesChainKeyName)) {
+            deliveriesChainCid = name.replace('/ipfs/', '')
+        }
+
+        deliveriesChainCid = CID.parse(deliveriesChainCid)
+
+        // Get last chained deliveriesChain DAG
+        let lastBlock = await ipfs.dag.get(deliveriesChainCid)
+
+        // remember and remove parent block CID
+        lastBlock = cloneDeep(lastBlock.value)
+        const parentChainCid = lastBlock.parent
+        delete lastBlock.parent
+
+//        if(!isEqual(deliveriesChain, lastBlock))
+        if(lastBlock.deliveries_cid.toString() != deliveriesChain.deliveries_cid.toString())
+        {
+            // Create new DAG, add new block to the deliveriesChain chain
+            // and refresh subs
+            deliveriesChain.parent = deliveriesChainCid
+
+            // Put new child block DAG
+            deliveriesChainCid = await ipfs.dag.put(deliveriesChain, {
+                storeCodec: 'dag-cbor',
+                hashAlg: 'sha2-256',
+                pin: true
+            })
+
+            // Publish pubsub
+            deliveriesChainSub = await ipfs.name.publish(deliveriesChainCid, {
+                lifetime: '87600h',
+                key: deliveriesChainKey.id
+            })
+        }
+    }
+
+    console.log(`Chain Key:`)
+    console.dir(deliveriesChainKey, { depth: null })
+    console.log(`Chain Sub:`)
+    console.dir(deliveriesChainSub, { depth: null })
+    console.log(`Chain CID:`)
+    console.dir(deliveriesChainCid, { depth: null })
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
 }
 
 // Update CSV file in github repo
