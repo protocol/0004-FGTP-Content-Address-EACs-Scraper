@@ -24,11 +24,6 @@ const STEP_6_FILE_NAME = '_step6_generationRecords.csv'
 const STEP_7_FILE_NAME = '_step7_certificate_to_contract.csv'
 
 // Define global vars
-let contracts = {}
-let demands = {}
-let redemptions = {}
-let certificates = {}
-let supplies = {}
 let nodeKeys
 
 // Create / attach to node 
@@ -151,6 +146,8 @@ async function getRawFromGithub(path, fileName, type, contentType) {
 }
 
 async function createOrderContractAllocations() {
+    let contracts = {}
+    let demands = {}
     let transactions = {}
 
     // Get existing node keys
@@ -445,6 +442,9 @@ async function createOrderContractAllocations() {
 }
 
 async function createAttestationsCertificates() {
+    let redemptions = {}
+    let certificates = {}
+    let supplies = {}
     let deliveries = {}
 
     // Get existing node keys
@@ -662,42 +662,42 @@ async function createAttestationsCertificates() {
                     console.log(`Attestations CID for ${attestationFolder}: ${attestationsCid}`)
 
                     // Add certificates to deliveries object for this delivery
-                    deliveries[attestationFolder.name] = {
+                    deliveries[transactionFolder.name] = {
                         "deliveries_cid": attestationsCid
                     }
                 }
                 else if(match.length > 1) {
                     console.error(`Can't have many '${matchName}' CSV files in '${attestationFolder}'`)
                     await new Promise(resolve => setTimeout(resolve, 1000));
-                    process.exit()
+                    continue
                 }
                 else {
                     console.error(`Didn't find '${matchName}' CSV file in '${attestationFolder}'`)
                     await new Promise(resolve => setTimeout(resolve, 1000));
-                    process.exit()
+                    continue
                 }
             }
             else if(certificatesCsvFile.length > 1) {
                 console.error(`Can't have many '${certificatesCsvFileName}' CSV files in '${attestationFolder}'`)
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                process.exit()
+                continue
             }
             else {
                 console.error(`Didn't find '${certificatesCsvFileName}' CSV file in '${attestationFolder}'`)
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                process.exit()
+                continue
             }
 
         }
         else if(redemptionsCsvFile.length > 1) {
             console.error(`Can't have many '${redemptionsCsvFileName}' CSV files in '${transactionFolder.path}'`)
-//            await new Promise(resolve => setTimeout(resolve, 1000));
-//            process.exit()
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            continue
         }
         else {
             console.error(`Didn't find '${redemptionsCsvFileName}' CSV file in '${transactionFolder.path}'`)
-//            await new Promise(resolve => setTimeout(resolve, 1000));
-//            process.exit()
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            continue
         }
     }
     // Create DAG structure for deliveries
