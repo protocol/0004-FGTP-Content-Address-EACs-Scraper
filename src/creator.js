@@ -8,7 +8,7 @@ import { Octokit } from '@octokit/core'
 import { Base64 } from 'js-base64'
 import isEqual from 'lodash.isequal'
 import cloneDeep from 'lodash.clonedeep'
-
+import moment from 'moment'
 
 // We'll do logging to fs
 let access = fs.createWriteStream(`./logs/creator-${(new Date()).toISOString()}.log`);
@@ -155,7 +155,7 @@ async function createOrderContractAllocations() {
 
     for (const transactionFolder of transactionFolders) {
         let demandsCache = {}
-        let contractsCache = []
+        let contractsCache = {}
         let allocations = {}
 
         // Get contents of transactions directory
@@ -183,6 +183,9 @@ async function createOrderContractAllocations() {
         if(orderCsvFile.length == 1) {
             // Get CSV content (acctually contracts for this specific order)
             contracts[transactionFolder.name] = await getRawFromGithub(transactionFolder.path, orderCsvFileName, 'csv')
+            
+            // Keep only allocated contracts
+            contracts[transactionFolder.name] = contracts[transactionFolder.name].filter((c) => {return c.step3_match_complete == 1})
 
             // Search for match CSV file
             const matchName = transactionFolder.name + STEP_3_FILE_NAME
@@ -233,11 +236,11 @@ async function createOrderContractAllocations() {
                     demandsCache[demand.contract_id].push(demandCid)
 
                     // Make vice-versa linking for allocations
-                    allocations[demand.allocation_id] = {
-                        "allocation": demand,
+                     allocations[demand.allocation_id] = {
                         "minerID": demand.minerID,
                         "volume_MWh": demand.volume_MWh,
                         "defaulted": demand.defaulted,
+                        "contract_id": demand.contract_id,
                         "allocation_cid": demandCid
                     }
                 }
@@ -264,7 +267,7 @@ async function createOrderContractAllocations() {
                     }
                     
                     // Add links to demands
-                    contract.demands = demandsCache[contract.contract_id]
+                    contract.allocations = demandsCache[contract.contract_id]
 
                     // Create DAG structures
                     const contractCid = await ipfs.dag.put(contract, {
@@ -276,22 +279,30 @@ async function createOrderContractAllocations() {
                     console.log(`Contract CID for ${contract.contract_id}: ${contractCid}`)
 
                     // Remeber contract IDs and CIDs
-                    contractsCache.push({
-                        id: contract.contract_id,
-                        cid: contractCid
-                    })
-
-                    // Make vice-versa linking for allocations
-                    for (let allocationId in allocations) {
-                        if(allocations[allocationId].allocation.contract_id == contract.contract_id)
-                            allocations[allocationId].contract_cid = contractCid
+                    contractsCache[contract.contract_id] = {
+                        "contract_id": contract.contract_id,
+                        "label": contract.label,
+                        "region": contract.region,
+                        "country": contract.country,
+                        "sellerName": contract.sellerName,
+                        "volume_MWh": contract.volume_MWh,
+                        "productType": contract.productType,
+                        "contractDate": contract.contractDate,
+                        "deliveryDate": contract.deliveryDate,
+                        "reportingEnd": contract.reportingEnd,
+                        "energySources": contract.energySources,
+                        "sellerAddress": contract.sellerAddress,
+                        "reportingStart": contract.reportingStart,
+                        "contract_cid": contractCid
                     }
+
                 }
 
                 // Create order object
                 const order = {
                     name: transactionFolder.name,
-                    contracts: contractsCache
+                    contracts: contractsCache,
+                    allocations: allocations
                 }
 
                 // Create DAG structure
@@ -303,23 +314,8 @@ async function createOrderContractAllocations() {
 
                 console.log(`Order CID for ${transactionFolder.name}: ${orderCid}`)
 
-                // Make vice-versa linking for allocations
-                for (let allocationId in allocations) {
-                    allocations[allocationId].order_cid = orderCid
-                }
-
-                // Create DAG structure for allocations
-                const allocationsCid = await ipfs.dag.put(allocations, {
-                    storeCodec: 'dag-cbor',
-                    hashAlg: 'sha2-256',
-                    pin: true
-                })
-
-                console.log(`Allocations CID for ${transactionFolder.name}: ${allocationsCid}`)
-
                 // Add allocations to transaction object for this transaction
                 transactions[transactionFolder.name] = {
-                    "allocations_cid": allocationsCid,
                     "order_cid": orderCid
                 }
             }
@@ -491,16 +487,24 @@ async function createAttestationsCertificates() {
             const attestationFolder = redemptions[transactionFolder.name][0].attestation_folder
 
             // Look for attestation folder and its contents
-            const attestationFolderItems = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-                owner: REPO_OWNER,
-                repo: REPO,
-                path: attestationFolder
-            })
+            let attestationFolderItems
+            try {
+                attestationFolderItems = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+                    owner: REPO_OWNER,
+                    repo: REPO,
+                    path: attestationFolder
+                })
+            }
+            catch (error) {
+                console.error('Didn\'t get valid \'attestationFolderItems\' response')
+                await new Promise(resolve => setTimeout(resolve, 1000))
+                continue
+            }
             if(attestationFolderItems.status != 200)
             {
                 console.error('Didn\'t get valid \'attestationFolderItems\' response')
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                process.exit()
+                await new Promise(resolve => setTimeout(resolve, 1000))
+                continue
             }
 
             // Search for certificates CSV file
@@ -573,10 +577,10 @@ async function createAttestationsCertificates() {
                         }
 
                         // Represent Date fields as Strings
-                        certificate.reportingStart = String(certificate.reportingStart)
-                        certificate.reportingEnd = String(certificate.reportingEnd)
-                        certificate.generationStart = String(certificate.generationStart)
-                        certificate.generationEnd = String(certificate.generationEnd)
+                        certificate.reportingStart = moment(certificate.reportingStart).toISOString()
+                        certificate.reportingEnd = moment(certificate.reportingEnd).toISOString()
+                        certificate.generationStart = moment(certificate.generationStart).toISOString()
+                        certificate.generationEnd = moment(certificate.generationEnd).toISOString()
 
                         // Add links to supplies
                         const sc = suppliesCache[certificate.certificate]
