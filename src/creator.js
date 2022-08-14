@@ -16,7 +16,7 @@ process.stdout.write = process.stderr.write = access.write.bind(access);
 
 // Define "source of thruth" github repo and conventions
 const REPO = 'filecoin-renewables-purchases'
-const REPO_OWNER = 'redransil'
+const REPO_OWNER = 'protocol'
 const STEP_2_FILE_NAME = '_step2_orderSupply.csv'
 const STEP_3_FILE_NAME = '_step3_match.csv'
 const STEP_5_FILE_NAME = '_step5_redemption_information.csv'
