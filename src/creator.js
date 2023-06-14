@@ -185,7 +185,7 @@ async function createOrderContractAllocations() {
             contracts[transactionFolder.name] = await getRawFromGithub(transactionFolder.path, orderCsvFileName, 'csv')
             
             // Keep only allocated contracts
-            contracts[transactionFolder.name] = contracts[transactionFolder.name].filter((c) => {return c.step3_match_complete == 1})
+//            contracts[transactionFolder.name] = contracts[transactionFolder.name].filter((c) => {return c.step3_match_complete == 1})
 
             // Search for match CSV file
             const matchName = transactionFolder.name + STEP_3_FILE_NAME
@@ -201,7 +201,13 @@ async function createOrderContractAllocations() {
                 demands[transactionFolder.name] = await getRawFromGithub(transactionFolder.path, matchName, 'csv')
 
                 // Delete mutable columns and at same create DAG structures for demands
-                for (const demand of demands[transactionFolder.name]) {
+                for (let demand of demands[transactionFolder.name]) {
+                    // Create an helper object to update step 3 CSV with the created allocation CID
+                    let demandWithCid = JSON.parse(JSON.stringify(demand))
+
+                    // Check if there is valid CSV line
+                    if(!demand.contract_id)
+                        continue
                     // Delete mutable columns
                     delete demand.UUID
                     delete demand.step4_ZL_contract_complete
@@ -229,6 +235,21 @@ async function createOrderContractAllocations() {
         
                     console.log(`Demand CID for ${demand.contract_id} / ${demand.minerID}: ${demandCid}`)
 
+                    // Update step 3 CSV
+                    demandWithCid.allocation_cid = demandCid.toString()
+                    const step3Header = ['"allocation_id"', '"UUID"', '"contract_id"', '"minerID"', '"volume_MWh"', '"defaulted"',
+                        '"step4_ZL_contract_complete"', '"step5_redemption_data_complete"', '"step6_attestation_info_complete"',
+                        '"step7_certificates_matched_to_supply"', '"step8_IPLDrecord_complete"', '"step9_transaction_complete"',
+                        '"step10_volta_complete"', '"step11_finalRecord_complete"', '"allocation_cid"']
+                    const step3ColumnTypes = ["string", "string", "string", "string", "number", "number",
+                        "number", "number", "number",
+                        "number", "number", "number",
+                        "number", "number", "string"]
+                    const step3CsvFileSha = match[0].sha
+                    
+                    await updateCsvInGithub(transactionFolder.name, matchName, step3CsvFileSha,
+                        step3Header, demandWithCid, step3ColumnTypes)
+                
                     // Relate demand CIDs with contract Id so that we do
                     // not have to traverse whole JSON structure
                     if(demandsCache[demand.contract_id] == null)
@@ -484,214 +505,244 @@ async function createAttestationsCertificates() {
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 process.exit()
             }
-            const attestationFolder = redemptions[transactionFolder.name][0].attestation_folder
 
-            // Look for attestation folder and its contents
-            let attestationFolderItems
-            try {
-                attestationFolderItems = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-                    owner: REPO_OWNER,
-                    repo: REPO,
-                    path: attestationFolder
-                })
-            }
-            catch (error) {
-                console.error('Didn\'t get valid \'attestationFolderItems\' response')
-                await new Promise(resolve => setTimeout(resolve, 1000))
-                continue
-            }
-            if(attestationFolderItems.status != 200)
-            {
-                console.error('Didn\'t get valid \'attestationFolderItems\' response')
-                await new Promise(resolve => setTimeout(resolve, 1000))
-                continue
-            }
-
-            // Search for certificates CSV file
-            const certificatesCsvFileName = attestationFolder + STEP_6_FILE_NAME
-
-            // Check if CSV file is present in the folder
-            const certificatesCsvFile = attestationFolderItems.data.filter((item) => {
-                return item.name == certificatesCsvFileName
-                    && item.type == 'file'
+            let attestationFolders = redemptions[transactionFolder.name].map((r)=>{
+                return r.attestation_folder
             })
+            attestationFolders = attestationFolders.filter((item, index) => attestationFolders.indexOf(item) === index) // remove duplicates
 
-            if(certificatesCsvFile.length == 1) {
-                // Get CSV content (acctually certificates and attestations)
-                certificates[attestationFolder] = await getRawFromGithub(attestationFolder, certificatesCsvFileName, 'csv')
+            // itterate through all attestation folders
+            for (const attestationFolder of attestationFolders) {
+                // Look for attestation folder and its contents
+                let attestationFolderItems
+                try {
+                    attestationFolderItems = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+                        owner: REPO_OWNER,
+                        repo: REPO,
+                        path: attestationFolder
+                    })
+                }
+                catch (error) {
+                    console.error('Didn\'t get valid \'attestationFolderItems\' response')
+                    await new Promise(resolve => setTimeout(resolve, 1000))
+                    continue
+                }
+                if(attestationFolderItems.status != 200)
+                {
+                    console.error('Didn\'t get valid \'attestationFolderItems\' response')
+                    await new Promise(resolve => setTimeout(resolve, 1000))
+                    continue
+                }
 
-                // Search for match / supply CSV file
-                const matchName = attestationFolder + STEP_7_FILE_NAME
+                // Search for certificates CSV file
+                const certificatesCsvFileName = attestationFolder + STEP_6_FILE_NAME
 
                 // Check if CSV file is present in the folder
-                const match = attestationFolderItems.data.filter((item) => {
-                    return item.name == matchName
+                const certificatesCsvFile = attestationFolderItems.data.filter((item) => {
+                    return item.name == certificatesCsvFileName
                         && item.type == 'file'
                 })
 
-                if(match.length == 1) {
-                    // Get CSV content (acctually supplies for certificates/attestations)
-                    supplies[attestationFolder] = await getRawFromGithub(attestationFolder, matchName, 'csv')
+                if(certificatesCsvFile.length == 1) {
+                    // Get CSV content (acctually certificates and attestations)
+                    certificates[attestationFolder] = await getRawFromGithub(attestationFolder, certificatesCsvFileName, 'csv')
 
-                    // Delete mutable columns and at same create DAG structures for supplies
-                    for (const supply of supplies[attestationFolder]) {
-                        // Make sure MWh are Numbers
-                        if(typeof supply.volume_MWh == "string") {
-                            supply.volume_MWh = supply.volume_MWh.replace(',', '')
-                            supply.volume_MWh = supply.volume_MWh.trim()
-                            supply.volume_MWh = Number(supply.volume_MWh)
-                        }
+                    // Search for match / supply CSV file
+                    const matchName = attestationFolder + STEP_7_FILE_NAME
 
-                        // Create DAG structures
-                        const supplyCid = await ipfs.dag.put(supply, {
-                            storeCodec: 'dag-cbor',
-                            hashAlg: 'sha2-256',
-                            pin: true
-                        })
-            
-                        console.log(`Supply CID for ${supply.certificate} / ${supply.allocation}: ${supplyCid}`)
-
-                        // Relate supply CIDs with certificate Id so that we do
-                        // not have to traverse whole JSON structure
-                        if(suppliesCache[supply.certificate] == null)
-                            suppliesCache[supply.certificate] = []
-                        suppliesCache[supply.certificate].push(supplyCid)
-                    }
-
-                    // Reset attestation documents cache
-                    attestationDocumentsCache = {}
-                    // Prepare an separate object for updating step 6 CSV
-                    let step6CsvObj = JSON.parse(JSON.stringify(certificates[attestationFolder]))
-                    let step6CsvInd = 0
-                    // Delete mutable columns and at same create DAG structures for certificates
-                    for (let certificate of certificates[attestationFolder]) {
-                        // Delete mutable columns
-                        delete certificate.attestation_cid
-                        delete certificate.certificate_cid
-
-                        // Make sure MWh are Numbers
-                        if(typeof certificate.volume_Wh == "string") {
-                            certificate.volume_Wh = certificate.volume_Wh.replace(',', '')
-                            certificate.volume_Wh = certificate.volume_Wh.trim()
-                            certificate.volume_Wh = Number(certificate.volume_Wh)
-                        }
-
-                        // Represent Date fields as Strings
-                        certificate.reportingStart = moment(certificate.reportingStart).toISOString()
-                        certificate.reportingEnd = moment(certificate.reportingEnd).toISOString()
-                        certificate.generationStart = moment(certificate.generationStart).toISOString()
-                        certificate.generationEnd = moment(certificate.generationEnd).toISOString()
-
-                        // Add links to supplies
-                        const sc = suppliesCache[certificate.certificate]
-                        certificate.supplies = (sc != undefined) ? sc : null
-
-                        // Add attestation document link
-                        let attestationDocumentCid
-                        // Get attestation document
-                        const attestationDocumentName = certificate.attestation_file
-                        // Did we already add this attestation document
-                        if(attestationDocumentsCache[attestationDocumentName] == null) {
-
-                            const attestationDocumentResp =  await getRawFromGithub(attestationFolder, attestationDocumentName, 'arraybuffer', 'application/pdf')
-                            if(attestationDocumentResp == null)
-                            {
-                                console.error(`Didn\'t get valid \'attestation document\' ${attestationDocumentName} in ${attestationFolder}`)
-                                await new Promise(resolve => setTimeout(resolve, 1000));
-                                process.exit()
-                            }
-                            
-                            // Add attestation document to IPFS
-                            attestationDocumentCid = await ipfs.add(attestationDocumentResp, {
-                                'cidVersion': 1,
-                                'hashAlg': 'sha2-256'
-                            })
-                            console.log(`Attestation document CID for ${attestationFolder}/${attestationDocumentName}, ${attestationDocumentCid.cid}`)
-
-                            attestationDocumentsCache[attestationDocumentName] = attestationDocumentCid
-                        }
-                        else {
-                            attestationDocumentCid = attestationDocumentsCache[attestationDocumentName]
-                        }
-
-                        certificate.attestationDocumentCid = attestationDocumentCid.cid
-
-                        // Create DAG structures
-                        const certificateCid = await ipfs.dag.put(certificate, {
-                            storeCodec: 'dag-cbor',
-                            hashAlg: 'sha2-256',
-                            pin: true
-                        })
-
-                        console.log(`Certificate CID for ${certificate.certificate}: ${certificateCid}`)
-
-                        // Remeber certificate IDs and CIDs
-                        certificatesCache.push({
-                            id: certificate.certificate,
-                            cid: certificateCid
-                        })
-                        
-                        // Add CIDs to update step 6 CSV file with certificate and attestation CIDs
-                        step6CsvObj[step6CsvInd].attestation_cid = attestationDocumentCid.cid.toString()
-                        step6CsvObj[step6CsvInd].certificate_cid = certificateCid.toString()
-                        step6CsvInd++
-                    }
-
-                    // Update step 6 CSV file
-                    const step6Header = ['"attestation_id"', '"attestation_file"', '"attestation_cid"', '"certificate"',
-                        '"certificate_cid"', '"reportingStart"', '"reportingStartTimezoneOffset"', '"reportingEnd"', '"reportingEndTimezoneOffset"',
-                        '"sellerName"', '"sellerAddress"', '"country"', '"region"', '"volume_Wh"', '"generatorName"', '"productType"', '"label"',
-                        '"energySource"', '"generationStart"', '"generationStartTimezoneOffset"', '"generationEnd"', '"generationEndTimezoneOffset"']
-                    const step6ColumnTypes = ["string", "string", "string", "string",
-                        "string", "string", "number", "string", "number",
-                        "string", "string", "string", "string", "number", "string", "string", "string",
-                        "string", "string", "number", "string", "number"]
-                    const step6CsvFileSha = certificatesCsvFile[0].sha
-                    await updateCsvInGithub(attestationFolder, certificatesCsvFileName, step6CsvFileSha,
-                        step6Header, step6CsvObj, step6ColumnTypes)
-
-                    // Create attestations object
-                    const attestations = {
-                        name: attestationFolder,
-                        certificates: certificatesCache
-                    }
-
-                    // Create DAG structure
-                    const attestationsCid = await ipfs.dag.put(attestations, {
-                        storeCodec: 'dag-cbor',
-                        hashAlg: 'sha2-256',
-                        pin: true
+                    // Check if CSV file is present in the folder
+                    const match = attestationFolderItems.data.filter((item) => {
+                        return item.name == matchName
+                            && item.type == 'file'
                     })
 
-                    console.log(`Attestations CID for ${attestationFolder}: ${attestationsCid}`)
+                    if(match.length == 1) {
+                        // Get CSV content (acctually supplies for certificates/attestations)
+                        supplies[attestationFolder] = await getRawFromGithub(attestationFolder, matchName, 'csv')
 
-                    // Add certificates to deliveries object for this delivery
-                    deliveries[transactionFolder.name] = {
-                        "deliveries_cid": attestationsCid
+                        // Delete mutable columns and at same create DAG structures for supplies
+                        for (const supply of supplies[attestationFolder]) {
+                            // skip if invalid / empty line
+                            if(!supply || !supply.certificate)
+                                continue
+
+                            // Make sure MWh are Numbers
+                            if(typeof supply.volume_MWh == "string") {
+                                supply.volume_MWh = supply.volume_MWh.replace(',', '')
+                                supply.volume_MWh = supply.volume_MWh.trim()
+                                supply.volume_MWh = Number(supply.volume_MWh)
+                            }
+
+                            // Create DAG structures
+                            const supplyCid = await ipfs.dag.put(supply, {
+                                storeCodec: 'dag-cbor',
+                                hashAlg: 'sha2-256',
+                                pin: true
+                            })
+                
+                            console.log(`Supply CID for ${supply.certificate}: ${supplyCid}`)
+
+                            // Relate supply CIDs with certificate Id so that we do
+                            // not have to traverse whole JSON structure
+                            if(suppliesCache[supply.certificate] == null)
+                                suppliesCache[supply.certificate] = []
+                            suppliesCache[supply.certificate].push(supplyCid)
+                        }
+
+                        // Reset attestation documents cache
+                        attestationDocumentsCache = {}
+                        // Prepare an separate object for updating step 6 CSV
+                        let step6CsvObj = JSON.parse(JSON.stringify(certificates[attestationFolder]))
+                        let step6CsvInd = 0
+                        // Delete mutable columns and at same create DAG structures for certificates
+                        for (let certificate of certificates[attestationFolder]) {
+                            // Delete mutable columns
+                            delete certificate.attestation_cid
+                            delete certificate.certificate_cid
+
+                            // Make sure MWh are Numbers
+                            if(typeof certificate.volume_Wh == "string") {
+                                certificate.volume_Wh = certificate.volume_Wh.replace(',', '')
+                                certificate.volume_Wh = certificate.volume_Wh.trim()
+                                certificate.volume_Wh = Number(certificate.volume_Wh)
+                            }
+
+                            // Represent Date fields as Strings
+                            if(certificate.reportingStart instanceof Date && Object.prototype.toString.call(certificate.reportingStart) === '[object Date]')
+                                certificate.reportingStart = certificate.reportingStart.toISOString()
+                            else
+                                certificate.reportingStart = moment(certificate.reportingStart).toISOString()
+                            if(certificate.reportingEnd instanceof Date && Object.prototype.toString.call(certificate.reportingEnd) === '[object Date]')
+                                certificate.reportingEnd = certificate.reportingEnd.toISOString()
+                            else
+                                certificate.reportingEnd = moment(certificate.reportingEnd).toISOString()
+                            if(certificate.generationStart instanceof Date && Object.prototype.toString.call(certificate.generationStart) === '[object Date]') {
+                                certificate.generationStart = certificate.generationStart.toISOString()
+                            }
+                            else {
+                                certificate.generationStart = moment(certificate.generationStart).toISOString()
+                            }
+                            if(certificate.generationEnd instanceof Date && Object.prototype.toString.call(certificate.generationEnd) === '[object Date]')
+                                certificate.generationEnd = certificate.generationEnd.toISOString()
+                            else
+                                certificate.generationEnd = moment(certificate.generationEnd).toISOString()
+
+                            // Add links to supplies
+                            const sc = suppliesCache[certificate.certificate]
+                            certificate.supplies = (sc != undefined) ? sc : null
+
+                            // Add attestation document link
+                            let attestationDocumentCid
+                            // Get attestation document
+                            const attestationDocumentName = certificate.attestation_file
+                            // Check do we have attestation document name
+                            if(!attestationDocumentName) {
+                                console.error(`No attestation file specified for ${certificate.attestation_id}`)
+                                continue
+                            }
+                            // Did we already add this attestation document
+                            if(attestationDocumentsCache[attestationDocumentName] == null) {
+
+                                const attestationDocumentResp =  await getRawFromGithub(attestationFolder, attestationDocumentName, 'arraybuffer', 'application/pdf')
+                                if(attestationDocumentResp == null)
+                                {
+                                    console.error(`Didn\'t get valid \'attestation document\' ${attestationDocumentName} in ${attestationFolder}`)
+                                    await new Promise(resolve => setTimeout(resolve, 1000));
+                                    process.exit()
+                                }
+                                
+                                // Add attestation document to IPFS
+                                attestationDocumentCid = await ipfs.add(attestationDocumentResp, {
+                                    'cidVersion': 1,
+                                    'hashAlg': 'sha2-256'
+                                })
+                                console.log(`Attestation document CID for ${attestationFolder}/${attestationDocumentName}, ${attestationDocumentCid.cid}`)
+
+                                attestationDocumentsCache[attestationDocumentName] = attestationDocumentCid
+                            }
+                            else {
+                                attestationDocumentCid = attestationDocumentsCache[attestationDocumentName]
+                            }
+
+                            certificate.attestationDocumentCid = attestationDocumentCid.cid
+
+                            // Create DAG structures
+                            const certificateCid = await ipfs.dag.put(certificate, {
+                                storeCodec: 'dag-cbor',
+                                hashAlg: 'sha2-256',
+                                pin: true
+                            })
+
+                            console.log(`Certificate CID for ${certificate.certificate}: ${certificateCid}`)
+
+                            // Remeber certificate IDs and CIDs
+                            certificatesCache.push({
+                                id: certificate.certificate,
+                                cid: certificateCid
+                            })
+                            
+                            // Add CIDs to update step 6 CSV file with certificate and attestation CIDs
+                            step6CsvObj[step6CsvInd].attestation_cid = attestationDocumentCid.cid.toString()
+                            step6CsvObj[step6CsvInd].certificate_cid = certificateCid.toString()
+                            step6CsvInd++
+                        }
+
+                        // Update step 6 CSV file
+                        const step6Header = ['"attestation_id"', '"attestation_file"', '"attestation_cid"', '"certificate"',
+                            '"certificate_cid"', '"reportingStart"', '"reportingStartTimezoneOffset"', '"reportingEnd"', '"reportingEndTimezoneOffset"',
+                            '"sellerName"', '"sellerAddress"', '"country"', '"region"', '"volume_Wh"', '"generatorName"', '"productType"', '"label"',
+                            '"energySource"', '"generationStart"', '"generationStartTimezoneOffset"', '"generationEnd"', '"generationEndTimezoneOffset"']
+                        const step6ColumnTypes = ["string", "string", "string", "string",
+                            "string", "string", "number", "string", "number",
+                            "string", "string", "string", "string", "number", "string", "string", "string",
+                            "string", "string", "number", "string", "number"]
+                        const step6CsvFileSha = certificatesCsvFile[0].sha
+                        
+                        await updateCsvInGithub(attestationFolder, certificatesCsvFileName, step6CsvFileSha,
+                            step6Header, step6CsvObj, step6ColumnTypes)
+
+                        // Create attestations object
+                        const attestations = {
+                            name: attestationFolder,
+                            certificates: certificatesCache
+                        }
+
+                        // Create DAG structure
+                        const attestationsCid = await ipfs.dag.put(attestations, {
+                            storeCodec: 'dag-cbor',
+                            hashAlg: 'sha2-256',
+                            pin: true
+                        })
+
+                        console.log(`Attestations CID for ${attestationFolder}: ${attestationsCid}`)
+
+                        // Add certificates to deliveries object for this delivery
+                        deliveries[transactionFolder.name] = {
+                            "deliveries_cid": attestationsCid
+                        }
+                    }
+                    else if(match.length > 1) {
+                        console.error(`Can't have many '${matchName}' CSV files in '${attestationFolder}'`)
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        continue
+                    }
+                    else {
+                        console.error(`Didn't find '${matchName}' CSV file in '${attestationFolder}'`)
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        continue
                     }
                 }
-                else if(match.length > 1) {
-                    console.error(`Can't have many '${matchName}' CSV files in '${attestationFolder}'`)
+                else if(certificatesCsvFile.length > 1) {
+                    console.error(`Can't have many '${certificatesCsvFileName}' CSV files in '${attestationFolder}'`)
                     await new Promise(resolve => setTimeout(resolve, 1000));
                     continue
                 }
                 else {
-                    console.error(`Didn't find '${matchName}' CSV file in '${attestationFolder}'`)
+                    console.error(`Didn't find '${certificatesCsvFileName}' CSV file in '${attestationFolder}'`)
                     await new Promise(resolve => setTimeout(resolve, 1000));
                     continue
                 }
             }
-            else if(certificatesCsvFile.length > 1) {
-                console.error(`Can't have many '${certificatesCsvFileName}' CSV files in '${attestationFolder}'`)
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                continue
-            }
-            else {
-                console.error(`Didn't find '${certificatesCsvFileName}' CSV file in '${attestationFolder}'`)
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                continue
-            }
-
         }
         else if(redemptionsCsvFile.length > 1) {
             console.error(`Can't have many '${redemptionsCsvFileName}' CSV files in '${transactionFolder.path}'`)
