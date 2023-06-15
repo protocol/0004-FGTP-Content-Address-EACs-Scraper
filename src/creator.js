@@ -200,6 +200,9 @@ async function createOrderContractAllocations() {
                 // Get CSV content (acctually demands for this specific order)
                 demands[transactionFolder.name] = await getRawFromGithub(transactionFolder.path, matchName, 'csv')
 
+                // Make redundant allocations structure for step 3 CSV update
+                let demandsWithCids = []
+                
                 // Delete mutable columns and at same create DAG structures for demands
                 for (let demand of demands[transactionFolder.name]) {
                     // Create an helper object to update step 3 CSV with the created allocation CID
@@ -235,20 +238,9 @@ async function createOrderContractAllocations() {
         
                     console.log(`Demand CID for ${demand.contract_id} / ${demand.minerID}: ${demandCid}`)
 
-                    // Update step 3 CSV
+                    // Add allocation_cid to allocation object for step 3 CSV update
                     demandWithCid.allocation_cid = demandCid.toString()
-                    const step3Header = ['"allocation_id"', '"UUID"', '"contract_id"', '"minerID"', '"volume_MWh"', '"defaulted"',
-                        '"step4_ZL_contract_complete"', '"step5_redemption_data_complete"', '"step6_attestation_info_complete"',
-                        '"step7_certificates_matched_to_supply"', '"step8_IPLDrecord_complete"', '"step9_transaction_complete"',
-                        '"step10_volta_complete"', '"step11_finalRecord_complete"', '"allocation_cid"']
-                    const step3ColumnTypes = ["string", "string", "string", "string", "number", "number",
-                        "number", "number", "number",
-                        "number", "number", "number",
-                        "number", "number", "string"]
-                    const step3CsvFileSha = match[0].sha
-                    
-                    await updateCsvInGithub(transactionFolder.name, matchName, step3CsvFileSha,
-                        step3Header, demandWithCid, step3ColumnTypes)
+                    demandsWithCids.push(demandWithCid)
                 
                     // Relate demand CIDs with contract Id so that we do
                     // not have to traverse whole JSON structure
@@ -266,6 +258,20 @@ async function createOrderContractAllocations() {
                     }
                 }
 
+                // Update step 3 CSV
+                const step3Header = ['"allocation_id"', '"UUID"', '"contract_id"', '"minerID"', '"volume_MWh"', '"defaulted"',
+                    '"step4_ZL_contract_complete"', '"step5_redemption_data_complete"', '"step6_attestation_info_complete"',
+                    '"step7_certificates_matched_to_supply"', '"step8_IPLDrecord_complete"', '"step9_transaction_complete"',
+                    '"step10_volta_complete"', '"step11_finalRecord_complete"', '"allocation_cid"']
+                const step3ColumnTypes = ["string", "string", "string", "string", "number", "number",
+                    "number", "number", "number",
+                    "number", "number", "number",
+                    "number", "number", "string"]
+                const step3CsvFileSha = match[0].sha
+                
+                await updateCsvInGithub(transactionFolder.name, matchName, step3CsvFileSha,
+                    step3Header, demandsWithCids, step3ColumnTypes)
+                
                 // Delete mutable columns and at same create DAG structures for contracts
                 for (const contract of contracts[transactionFolder.name]) {
                     // Delete mutable columns
