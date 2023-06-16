@@ -205,12 +205,13 @@ async function createOrderContractAllocations() {
                 
                 // Delete mutable columns and at same create DAG structures for demands
                 for (let demand of demands[transactionFolder.name]) {
+                    // Check if this is non-empty row in CSV
+                    if(!demand.allocation_id || !demand.contract_id)
+                        continue
+
                     // Create an helper object to update step 3 CSV with the created allocation CID
                     let demandWithCid = JSON.parse(JSON.stringify(demand))
 
-                    // Check if there is valid CSV line
-                    if(!demand.contract_id)
-                        continue
                     // Delete mutable columns
                     delete demand.UUID
                     delete demand.step4_ZL_contract_complete
@@ -274,6 +275,10 @@ async function createOrderContractAllocations() {
                 
                 // Delete mutable columns and at same create DAG structures for contracts
                 for (const contract of contracts[transactionFolder.name]) {
+                    // Check if this is non-empty row in CSV
+                    if(!contract.contract_id)
+                        continue
+
                     // Delete mutable columns
                     delete contract.step2_order_complete
                     delete contract.step3_match_complete
@@ -294,7 +299,7 @@ async function createOrderContractAllocations() {
                     }
                     
                     // Add links to demands
-                    contract.allocations = demandsCache[contract.contract_id]
+                    contract.allocations = (demandsCache[contract.contract_id]) ? demandsCache[contract.contract_id] : []
 
                     // Create DAG structures
                     const contractCid = await ipfs.dag.put(contract, {
