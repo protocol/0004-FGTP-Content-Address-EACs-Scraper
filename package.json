@@ -13,7 +13,7 @@
 	"scripts": {
 		"scraper": "env-cmd node src/scraper.js",
 		"cleaner": "env-cmd node src/cleaner.js",
-		"creator": "env-cmd node src/creator.js"
+		"creator": "env-cmd node --stack-trace-limit=1000 src/creator.js"
 	},
 	"dependencies": {
 		"@octokit/core": "^3.6.0",
